@@ -4602,13 +4602,12 @@ func ValidatePodUpdate(newPod, oldPod *core.Pod, opts PodValidationOptions) fiel
 	// separate PR covering all uses of GetPodQOS. With that change, we can drop the below block.
 	// Ref: https://github.com/kubernetes/kubernetes/pull/102884#discussion_r1093790446
 	// Ref: https://github.com/kubernetes/kubernetes/pull/102884/#discussion_r663280487
-	if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
-		// reject attempts to change pod qos
-		oldQoS := qos.GetPodQOS(oldPod)
-		newQoS := qos.GetPodQOS(newPod)
-		if newQoS != oldQoS {
-			allErrs = append(allErrs, field.Invalid(fldPath, newQoS, "Pod QoS is immutable"))
-		}
+
+	// reject attempts to change pod qos
+	oldQoS := qos.GetPodQOS(oldPod)
+	newQoS := qos.GetPodQOS(newPod)
+	if newQoS != oldQoS {
+		allErrs = append(allErrs, field.Invalid(fldPath, newQoS, "Pod QoS is immutable"))
 	}
 
 	// handle updateable fields by munging those fields prior to deep equal comparison.
@@ -4619,33 +4618,33 @@ func ValidatePodUpdate(newPod, oldPod *core.Pod, opts PodValidationOptions) fiel
 		container.Image = oldPod.Spec.Containers[ix].Image // +k8s:verify-mutation:reason=clone
 		// When the feature-gate is turned off, any new requests attempting to update CPU or memory
 		// resource values will result in validation failure.
-		if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
-			// Resources are mutable for CPU & memory only
-			//   - user can now modify Resources to express new desired Resources
-			mungeCpuMemResources := func(resourceList, oldResourceList core.ResourceList) core.ResourceList {
-				if oldResourceList == nil {
-					return nil
-				}
-				var mungedResourceList core.ResourceList
-				if resourceList == nil {
-					mungedResourceList = make(core.ResourceList)
-				} else {
-					mungedResourceList = resourceList.DeepCopy()
-				}
-				delete(mungedResourceList, core.ResourceCPU)
-				delete(mungedResourceList, core.ResourceMemory)
-				if cpu, found := oldResourceList[core.ResourceCPU]; found {
-					mungedResourceList[core.ResourceCPU] = cpu
-				}
-				if mem, found := oldResourceList[core.ResourceMemory]; found {
-					mungedResourceList[core.ResourceMemory] = mem
-				}
-				return mungedResourceList
+
+		// Resources are mutable for CPU & memory only
+		//   - user can now modify Resources to express new desired Resources
+		mungeCpuMemResources := func(resourceList, oldResourceList core.ResourceList) core.ResourceList {
+			if oldResourceList == nil {
+				return nil
 			}
-			lim := mungeCpuMemResources(container.Resources.Limits, oldPod.Spec.Containers[ix].Resources.Limits)
-			req := mungeCpuMemResources(container.Resources.Requests, oldPod.Spec.Containers[ix].Resources.Requests)
-			container.Resources = core.ResourceRequirements{Limits: lim, Requests: req}
+			var mungedResourceList core.ResourceList
+			if resourceList == nil {
+				mungedResourceList = make(core.ResourceList)
+			} else {
+				mungedResourceList = resourceList.DeepCopy()
+			}
+			delete(mungedResourceList, core.ResourceCPU)
+			delete(mungedResourceList, core.ResourceMemory)
+			if cpu, found := oldResourceList[core.ResourceCPU]; found {
+				mungedResourceList[core.ResourceCPU] = cpu
+			}
+			if mem, found := oldResourceList[core.ResourceMemory]; found {
+				mungedResourceList[core.ResourceMemory] = mem
+			}
+			return mungedResourceList
 		}
+		lim := mungeCpuMemResources(container.Resources.Limits, oldPod.Spec.Containers[ix].Resources.Limits)
+		req := mungeCpuMemResources(container.Resources.Requests, oldPod.Spec.Containers[ix].Resources.Requests)
+		container.Resources = core.ResourceRequirements{Limits: lim, Requests: req}
+
 		newContainers = append(newContainers, container)
 	}
 	mungedPodSpec.Containers = newContainers
@@ -4711,9 +4710,9 @@ func ValidatePodUpdate(newPod, oldPod *core.Pod, opts PodValidationOptions) fiel
 		// TODO: Pinpoint the specific field that causes the invalid error after we have strategic merge diff
 		specDiff := cmp.Diff(oldPod.Spec, mungedPodSpec)
 		errs := field.Forbidden(specPath, fmt.Sprintf("pod updates may not change fields other than %s\n%v", strings.Join(updatablePodSpecFieldsNoResources, ","), specDiff))
-		if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
-			errs = field.Forbidden(specPath, fmt.Sprintf("pod updates may not change fields other than %s\n%v", strings.Join(updatablePodSpecFields, ","), specDiff))
-		}
+
+		errs = field.Forbidden(specPath, fmt.Sprintf("pod updates may not change fields other than %s\n%v", strings.Join(updatablePodSpecFields, ","), specDiff))
+
 		allErrs = append(allErrs, errs)
 	}
 	return allErrs
