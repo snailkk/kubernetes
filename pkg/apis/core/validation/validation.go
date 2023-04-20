@@ -4505,6 +4505,35 @@ func validateSeccompAnnotationsAndFieldsMatch(annotationValue string, seccompFie
 
 	return nil
 }
+func mungeCpuMemResources(resourceList, oldResourceList core.ResourceList) core.ResourceList {
+	if oldResourceList == nil {
+		return nil
+	}
+	var mungedResourceList core.ResourceList
+	if resourceList == nil {
+		mungedResourceList = make(core.ResourceList)
+	} else {
+		mungedResourceList = resourceList.DeepCopy()
+	}
+	delete(mungedResourceList, core.ResourceCPU)
+	delete(mungedResourceList, core.ResourceMemory)
+	if cpu, found := oldResourceList[core.ResourceCPU]; found {
+		mungedResourceList[core.ResourceCPU] = cpu
+	}
+	if mem, found := oldResourceList[core.ResourceMemory]; found {
+		mungedResourceList[core.ResourceMemory] = mem
+	}
+	return mungedResourceList
+}
+
+var updatablePodSpecFields = []string{
+	"`spec.containers[*].image`",
+	"`spec.initContainers[*].image`",
+	"`spec.activeDeadlineSeconds`",
+	"`spec.tolerations` (only additions to existing tolerations)",
+	"`spec.terminationGracePeriodSeconds` (allow it to be set to 1 if it was previously negative)",
+	"`spec.containers[*].resources` (for CPU/memory only)",
+}
 
 // ValidatePodUpdate tests to see if the update is legal for an end user to make. newPod is updated with fields
 // that cannot be changed.
@@ -4571,6 +4600,10 @@ func ValidatePodUpdate(newPod, oldPod *core.Pod, opts PodValidationOptions) fiel
 	var newContainers []core.Container
 	for ix, container := range mungedPodSpec.Containers {
 		container.Image = oldPod.Spec.Containers[ix].Image // +k8s:verify-mutation:reason=clone
+		limit := mungeCpuMemResources(container.Resources.Limits, oldPod.Spec.Containers[ix].Resources.Limits)
+		request := mungeCpuMemResources(container.Resources.Requests, oldPod.Spec.Containers[ix].Resources.Requests)
+		container.Resources = core.ResourceRequirements{Limits: limit, Requests: request}
+
 		newContainers = append(newContainers, container)
 	}
 	mungedPodSpec.Containers = newContainers
@@ -4602,9 +4635,9 @@ func ValidatePodUpdate(newPod, oldPod *core.Pod, opts PodValidationOptions) fiel
 		// This diff isn't perfect, but it's a helluva lot better an "I'm not going to tell you what the difference is".
 		// TODO: Pinpoint the specific field that causes the invalid error after we have strategic merge diff
 		specDiff := cmp.Diff(oldPod.Spec, mungedPodSpec)
-		allErrs = append(allErrs, field.Forbidden(specPath, fmt.Sprintf("pod updates may not change fields other than `spec.containers[*].image`, `spec.initContainers[*].image`, `spec.activeDeadlineSeconds`, `spec.tolerations` (only additions to existing tolerations) or `spec.terminationGracePeriodSeconds` (allow it to be set to 1 if it was previously negative)\n%v", specDiff)))
+		errs := field.Forbidden(specPath, fmt.Sprintf("pod updates may not change fields other than %s\n%v", strings.Join(updatablePodSpecFields, ","), specDiff))
+		allErrs = append(allErrs, errs)
 	}
-
 	return allErrs
 }
 
